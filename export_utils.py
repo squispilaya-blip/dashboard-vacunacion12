@@ -67,13 +67,14 @@ def export_pdf(
     sem_color_hex = sem_colors.get(sem_label, "#64748b")
 
     buf = io.BytesIO()
+    MARGIN = 0.7 * cm
     doc = SimpleDocTemplate(
         buf, pagesize=A4,
-        rightMargin=1.8 * cm, leftMargin=1.8 * cm,
-        topMargin=1.5 * cm, bottomMargin=1.5 * cm,
+        rightMargin=MARGIN, leftMargin=MARGIN,
+        topMargin=1.2 * cm, bottomMargin=1.2 * cm,
     )
     styles = getSampleStyleSheet()
-    page_w = A4[0] - 3.6 * cm  # ancho útil
+    page_w = A4[0] - 2 * MARGIN  # ancho útil ≈ 19.6 cm
 
     title_style = ParagraphStyle(
         "title", parent=styles["Title"],
@@ -119,23 +120,27 @@ def export_pdf(
     # ── Mapa ──────────────────────────────────────────────────────────
     elements.append(Paragraph("Mapa de Cobertura por Provincia", section_style))
     try:
-        map_w, map_h = _resize_image_for_pdf(map_png, max_width_cm=16, max_height_cm=11)
+        from reportlab.lib.units import cm as _cm
+        max_w = (page_w - 0.2 * _cm) / _cm   # cm disponibles ≈ 19.4
+        map_w, map_h = _resize_image_for_pdf(map_png, max_width_cm=max_w, max_height_cm=14)
         elements.append(RLImage(io.BytesIO(map_png),
                                 width=map_w * cm, height=map_h * cm))
     except Exception:
         elements.append(Paragraph("(Imagen del mapa no disponible)", sub_style))
-    elements.append(Spacer(1, 0.4 * cm))
+    elements.append(Spacer(1, 0.3 * cm))
 
     # ── Gráfico barras ────────────────────────────────────────────────
     if bar_png and len(bar_png) > 100:
         elements.append(Paragraph("Comparativo por Provincia", section_style))
         try:
-            bar_w, bar_h = _resize_image_for_pdf(bar_png, max_width_cm=16, max_height_cm=8)
+            from reportlab.lib.units import cm as _cm
+            max_w = (page_w - 0.2 * _cm) / _cm
+            bar_w, bar_h = _resize_image_for_pdf(bar_png, max_width_cm=max_w, max_height_cm=9)
             elements.append(RLImage(io.BytesIO(bar_png),
                                     width=bar_w * cm, height=bar_h * cm))
         except Exception:
             elements.append(Paragraph("(Gráfico de barras no disponible)", sub_style))
-        elements.append(Spacer(1, 0.4 * cm))
+        elements.append(Spacer(1, 0.3 * cm))
 
     # ── Tabla detalle ─────────────────────────────────────────────────
     elements.append(Paragraph("Detalle por Provincia", section_style))
@@ -159,7 +164,15 @@ def export_pdf(
             Paragraph(estado, cell_s),
         ])
 
-    col_widths = [5.5 * cm, 2.8 * cm, 2.8 * cm, 3.2 * cm, 3.2 * cm]
+    # Reparte el ancho útil: Provincia 35%, resto 4 cols iguales
+    _cw = page_w / cm
+    col_widths = [
+        _cw * 0.35 * cm,
+        _cw * 0.165 * cm,
+        _cw * 0.165 * cm,
+        _cw * 0.165 * cm,
+        _cw * 0.155 * cm,
+    ]
     tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
 
     ts = [
