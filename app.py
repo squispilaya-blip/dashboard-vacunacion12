@@ -274,6 +274,22 @@ def render_detail_view(df: pd.DataFrame, vacuna: str):
         st.error(f"No hay datos para: {vacuna}")
         return
 
+    # Botón volver — prominente en el contenido principal
+    col_back, col_title = st.columns([1, 5])
+    with col_back:
+        if st.button("← Volver", use_container_width=True, type="primary"):
+            st.session_state.view = "general"
+            st.session_state.selected_vaccine = None
+            st.rerun()
+    with col_title:
+        st.markdown(
+            f'<div style="padding:6px 0;font-size:1rem;font-weight:700;color:#1e3a5f;">'
+            f'Vacuna: {vacuna}</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
     # KPIs de la vacuna
     total_meta  = int(df_vac["meta"].sum())
     total_dosis = int(df_vac["dosis"].sum())
