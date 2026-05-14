@@ -10,7 +10,6 @@ import pandas as pd
 
 MAP_PATH = "mapa-departamento-huancavelica-provincias.png"
 
-# Puntos semilla por provincia (coordenadas px en imagen 827×1170)
 PROVINCE_SEEDS = {
     "TAYACAJA":       [(530, 180), (480, 140), (600, 200)],
     "CHURCAMPA":      [(630, 335), (660, 345)],
@@ -21,18 +20,6 @@ PROVINCE_SEEDS = {
     "HUAYTARA":       [(420, 820), (380, 800), (450, 850)],
 }
 
-# Posiciones de badges — desplazadas debajo del nombre de cada provincia
-# pero con desplazamiento conservador para no salirse de la provincia
-LABEL_POSITIONS = {
-    "TAYACAJA":       {"pct": (480, 205)},   # provincia grande, desplazamiento amplio
-    "CHURCAMPA":      {"pct": (625, 358)},   # provincia pequeña, desplazamiento mínimo
-    "ACOBAMBA":       {"pct": (572, 460)},   # provincia pequeña, desplazamiento mínimo
-    "HUANCAVELICA":   {"pct": (295, 460)},   # provincia grande
-    "ANGARAES":       {"pct": (524, 605)},   # desplazamiento moderado
-    "CASTROVIRREYNA": {"pct": (165, 650)},   # provincia grande
-    "HUAYTARA":       {"pct": (395, 840)},   # provincia grande
-}
-
 
 def _hex_to_rgba(hex_color: str, alpha: int = 185) -> tuple:
     h = hex_color.lstrip("#")
@@ -40,8 +27,8 @@ def _hex_to_rgba(hex_color: str, alpha: int = 185) -> tuple:
 
 
 def _load_font(size: int):
-    """Carga fuente TrueType en varios paths (Windows, Linux, macOS)."""
-    candidates = [
+    """Carga fuente TrueType; prueba rutas Windows, Linux (Streamlit Cloud) y macOS."""
+    for path in [
         "arialbd.ttf", "arial.ttf",
         "DejaVuSans-Bold.ttf", "DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -53,15 +40,13 @@ def _load_font(size: int):
         "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/System/Library/Fonts/Arial.ttf",
-    ]
-    for name in candidates:
+    ]:
         try:
-            return ImageFont.truetype(name, size)
+            return ImageFont.truetype(path, size)
         except Exception:
             continue
-    # Pillow >= 10.1.0 soporta size= en load_default
     try:
-        return ImageFont.load_default(size=size)
+        return ImageFont.load_default(size=size)   # Pillow >= 10.1
     except TypeError:
         return ImageFont.load_default()
 
@@ -73,37 +58,75 @@ def _draw_badge(draw, cx, cy, text, font, bg_color, text_color=(255, 255, 255),
     w, h = tw + pad_x * 2, th + pad_y * 2
     x0, y0 = cx - w // 2, cy - h // 2
     draw.rounded_rectangle([x0, y0, x0 + w, y0 + h], radius=radius,
-                            fill=bg_color + (220,), outline=(255, 255, 255, 160), width=2)
+                            fill=bg_color + (225,),
+                            outline=(255, 255, 255, 180), width=2)
     draw.text((cx, cy), text, font=font, fill=text_color + (255,), anchor="mm")
+
+
+def _badge_position_from_mask(changed: np.ndarray, lower_fraction: float = 0.60) -> tuple:
+    """
+    Dado el mask de píxeles de una provincia, devuelve (cx, cy) en el
+    lower_fraction inferior — lejos del nombre que está en la parte superior.
+    """
+    ys, xs = np.where(changed)
+    y_min, y_max = int(ys.min()), int(ys.max())
+    height = y_max - y_min
+
+    lower_start = y_min + int(height * lower_fraction)
+    lower_mask = changed & (np.arange(changed.shape[0])[:, None] >= lower_start)
+
+    if lower_mask.any():
+        yl, xl = np.where(lower_mask)
+        return int(np.median(xl)), int(np.median(yl))
+    return int(np.median(xs)), int(np.median(ys))
 
 
 def render_colored_map(df: pd.DataFrame, vacuna: str,
                        map_path: str = MAP_PATH) -> bytes:
     """
     Genera mapa PNG con provincias coloreadas según semáforo y badges de cobertura.
+    Los badges se posicionan automáticamente en el tercio inferior de cada provincia,
+    lejos del nombre que el PNG ya tiene impreso en la parte superior.
     Retorna bytes PNG.
     """
     img = Image.open(map_path).convert("RGBA")
     colored = img.copy()
 
     df_vac = df[df["vacuna"] == vacuna]
+    badge_positions: dict[str, tuple] = {}
 
-    # Flood-fill por provincia
+    # Flood-fill por provincia; captura before/after con numpy para localizar
+    # exactamente qué píxeles pertenecen a cada provincia.
+    prev_arr = np.array(colored)
+
     for _, row in df_vac.iterrows():
         prov = row["provincia"]
         color = _hex_to_rgba(row["sem_color"], alpha=195)
+        filled = False
+
         for seed in PROVINCE_SEEDS.get(prov, []):
             try:
                 px = colored.getpixel(seed)
                 if px[0] > 50 or px[1] > 50 or px[2] > 50:
                     ImageDraw.floodfill(colored, seed, color, thresh=80)
+                    filled = True
                     break
             except Exception:
                 continue
 
-    result = Image.alpha_composite(img, colored)
+        if not filled:
+            continue
 
-    # Reforzar bordes con numpy (rápido): restaurar píxeles oscuros del original
+        curr_arr = np.array(colored)
+        changed = np.any(curr_arr != prev_arr, axis=2)
+
+        if changed.any():
+            badge_positions[prov] = _badge_position_from_mask(changed, lower_fraction=0.60)
+
+        prev_arr = curr_arr
+
+    # Composite y refuerzo de bordes con numpy (rápido)
+    result = Image.alpha_composite(img, colored)
     orig_arr = np.array(img)
     res_arr = np.array(result)
     is_border = (orig_arr[:, :, 0] < 70) & (orig_arr[:, :, 1] < 70) & (orig_arr[:, :, 2] < 70)
@@ -114,20 +137,19 @@ def render_colored_map(df: pd.DataFrame, vacuna: str,
     draw = ImageDraw.Draw(result)
     font = _load_font(28)
 
-    # Badges de % por provincia
+    # Dibuja badges en posiciones calculadas automáticamente
     for _, row in df_vac.iterrows():
         prov = row["provincia"]
-        pos = LABEL_POSITIONS.get(prov)
-        if not pos:
+        pos = badge_positions.get(prov)
+        if pos is None:
             continue
         hex_c = row["sem_color"].lstrip("#")
         bg = (int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16))
         bg_dark = tuple(max(0, c - 35) for c in bg)
         txt_color = (20, 10, 0) if row["sem_color"] == "#f59e0b" else (255, 255, 255)
-        _draw_badge(draw, pos["pct"][0], pos["pct"][1],
+        _draw_badge(draw, pos[0], pos[1],
                     f"{row['cobertura_pct']:.1f}%", font, bg_dark, txt_color)
 
-    # Leyenda
     _draw_legend(draw, result.size[0], result.size[1])
 
     buf = io.BytesIO()
@@ -144,14 +166,14 @@ def _draw_legend(draw, W, H):
     ]
     font_b = _load_font(17)
     font_s = _load_font(14)
-    lx, ly = W - 215, H - 178
-    pad, bw, bh = 10, 200, 158
+    lx, ly = W - 215, H - 180
+    pad, bw, bh = 10, 200, 162
     draw.rounded_rectangle([lx - pad, ly - pad, lx + bw, ly + bh],
                             radius=10, fill=(15, 15, 25, 210),
                             outline=(255, 255, 255, 60), width=1)
     draw.text((lx + 5, ly + 2), "SEMÁFORO", font=font_b, fill=(180, 210, 255, 255))
     for i, (color_hex, label, rango) in enumerate(items):
-        iy = ly + 32 + i * 40
+        iy = ly + 32 + i * 42
         h_ex = color_hex.lstrip("#")
         c = (int(h_ex[0:2], 16), int(h_ex[2:4], 16), int(h_ex[4:6], 16))
         draw.rounded_rectangle([lx + 4, iy, lx + 28, iy + 22], radius=5, fill=c + (230,))
