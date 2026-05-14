@@ -4,7 +4,7 @@ Colorea el mapa PNG de Huancavelica con flood-fill según cobertura (semáforo).
 Umbrales: >=33.2% Logrado (verde), 26.4-33.1% En Proceso (amarillo), <=26.3% Crítico (rojo)
 """
 import io
-import os
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 import pandas as pd
 
@@ -21,14 +21,16 @@ PROVINCE_SEEDS = {
     "HUAYTARA":       [(420, 820), (380, 800), (450, 850)],
 }
 
+# Posiciones de badges — desplazadas debajo del nombre de cada provincia
+# pero con desplazamiento conservador para no salirse de la provincia
 LABEL_POSITIONS = {
-    "TAYACAJA":       {"pct": (480, 230), "num": (480, 266)},
-    "CHURCAMPA":      {"pct": (614, 380), "num": (614, 416)},
-    "ACOBAMBA":       {"pct": (558, 490), "num": (558, 526)},
-    "HUANCAVELICA":   {"pct": (305, 480), "num": (305, 516)},
-    "ANGARAES":       {"pct": (524, 630), "num": (524, 666)},
-    "CASTROVIRREYNA": {"pct": (172, 680), "num": (172, 716)},
-    "HUAYTARA":       {"pct": (395, 860), "num": (395, 896)},
+    "TAYACAJA":       {"pct": (480, 205)},   # provincia grande, desplazamiento amplio
+    "CHURCAMPA":      {"pct": (625, 358)},   # provincia pequeña, desplazamiento mínimo
+    "ACOBAMBA":       {"pct": (572, 460)},   # provincia pequeña, desplazamiento mínimo
+    "HUANCAVELICA":   {"pct": (295, 460)},   # provincia grande
+    "ANGARAES":       {"pct": (524, 605)},   # desplazamiento moderado
+    "CASTROVIRREYNA": {"pct": (165, 650)},   # provincia grande
+    "HUAYTARA":       {"pct": (395, 840)},   # provincia grande
 }
 
 
@@ -37,28 +39,41 @@ def _hex_to_rgba(hex_color: str, alpha: int = 185) -> tuple:
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
 
-def _load_font(size: int) -> ImageFont.FreeTypeFont:
-    for name in [
+def _load_font(size: int):
+    """Carga fuente TrueType en varios paths (Windows, Linux, macOS)."""
+    candidates = [
         "arialbd.ttf", "arial.ttf",
         "DejaVuSans-Bold.ttf", "DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
-    ]:
+        "/System/Library/Fonts/Arial.ttf",
+    ]
+    for name in candidates:
         try:
             return ImageFont.truetype(name, size)
         except Exception:
             continue
-    return ImageFont.load_default()
+    # Pillow >= 10.1.0 soporta size= en load_default
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()
 
 
 def _draw_badge(draw, cx, cy, text, font, bg_color, text_color=(255, 255, 255),
-                pad_x=10, pad_y=4, radius=8):
+                pad_x=12, pad_y=6, radius=10):
     bbox = font.getbbox(text)
     tw, th = bbox[2] - bbox[0], bbox[3] - bbox[1]
     w, h = tw + pad_x * 2, th + pad_y * 2
     x0, y0 = cx - w // 2, cy - h // 2
     draw.rounded_rectangle([x0, y0, x0 + w, y0 + h], radius=radius,
-                            fill=bg_color + (210,), outline=(255, 255, 255, 120), width=1)
+                            fill=bg_color + (220,), outline=(255, 255, 255, 160), width=2)
     draw.text((cx, cy), text, font=font, fill=text_color + (255,), anchor="mm")
 
 
@@ -86,24 +101,18 @@ def render_colored_map(df: pd.DataFrame, vacuna: str,
             except Exception:
                 continue
 
-    # Composite flood-fill then re-overlay original at higher opacity to sharpen borders
     result = Image.alpha_composite(img, colored)
-    # Re-composite original image to strengthen province border lines
-    border_overlay = img.copy()
-    border_pixels = border_overlay.load()
-    w_img, h_img = border_overlay.size
-    for y in range(h_img):
-        for x in range(w_img):
-            r, g, b, a = border_pixels[x, y]
-            # Original dark pixels are border lines — boost their opacity
-            if r < 80 and g < 80 and b < 80:
-                border_pixels[x, y] = (r, g, b, 255)
-            else:
-                border_pixels[x, y] = (r, g, b, 0)
-    result = Image.alpha_composite(result, border_overlay)
+
+    # Reforzar bordes con numpy (rápido): restaurar píxeles oscuros del original
+    orig_arr = np.array(img)
+    res_arr = np.array(result)
+    is_border = (orig_arr[:, :, 0] < 70) & (orig_arr[:, :, 1] < 70) & (orig_arr[:, :, 2] < 70)
+    res_arr[is_border] = orig_arr[is_border]
+    res_arr[is_border, 3] = 255
+    result = Image.fromarray(res_arr)
 
     draw = ImageDraw.Draw(result)
-    font = _load_font(26)
+    font = _load_font(28)
 
     # Badges de % por provincia
     for _, row in df_vac.iterrows():
@@ -113,8 +122,8 @@ def render_colored_map(df: pd.DataFrame, vacuna: str,
             continue
         hex_c = row["sem_color"].lstrip("#")
         bg = (int(hex_c[0:2], 16), int(hex_c[2:4], 16), int(hex_c[4:6], 16))
-        bg_dark = tuple(max(0, c - 40) for c in bg)
-        txt_color = (30, 20, 0) if row["sem_color"] == "#f59e0b" else (255, 255, 255)
+        bg_dark = tuple(max(0, c - 35) for c in bg)
+        txt_color = (20, 10, 0) if row["sem_color"] == "#f59e0b" else (255, 255, 255)
         _draw_badge(draw, pos["pct"][0], pos["pct"][1],
                     f"{row['cobertura_pct']:.1f}%", font, bg_dark, txt_color)
 
@@ -133,21 +142,21 @@ def _draw_legend(draw, W, H):
         ("#f59e0b", "En Proceso", "26.4–33.1%"),
         ("#ef4444", "Crítico",    "≤ 26.3%"),
     ]
-    font_b = _load_font(18)
-    font_s = _load_font(15)
-    lx, ly = W - 210, H - 175
-    pad, bw, bh = 10, 195, 155
+    font_b = _load_font(17)
+    font_s = _load_font(14)
+    lx, ly = W - 215, H - 178
+    pad, bw, bh = 10, 200, 158
     draw.rounded_rectangle([lx - pad, ly - pad, lx + bw, ly + bh],
                             radius=10, fill=(15, 15, 25, 210),
                             outline=(255, 255, 255, 60), width=1)
     draw.text((lx + 5, ly + 2), "SEMÁFORO", font=font_b, fill=(180, 210, 255, 255))
     for i, (color_hex, label, rango) in enumerate(items):
-        iy = ly + 32 + i * 38
+        iy = ly + 32 + i * 40
         h_ex = color_hex.lstrip("#")
         c = (int(h_ex[0:2], 16), int(h_ex[2:4], 16), int(h_ex[4:6], 16))
         draw.rounded_rectangle([lx + 4, iy, lx + 28, iy + 22], radius=5, fill=c + (230,))
         draw.text((lx + 36, iy + 2), label, font=font_b, fill=(255, 255, 255, 255))
-        draw.text((lx + 36, iy + 18), rango, font=font_s, fill=(180, 180, 180, 220))
+        draw.text((lx + 36, iy + 20), rango, font=font_s, fill=(180, 180, 180, 220))
 
 
 def get_legend_html() -> str:
