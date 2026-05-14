@@ -105,12 +105,21 @@ def build_bar_chart(df_vacuna: pd.DataFrame, vacuna_name: str) -> go.Figure:
 
 def build_heatmap(df: pd.DataFrame) -> go.Figure:
     """Heatmap de coberturas: filas=provincia, columnas=vacuna."""
+    import numpy as np
     pivot = df.pivot_table(
         index="provincia", columns="vacuna",
         values="cobertura_pct", aggfunc="first"
-    )
+    ).fillna(0)  # reemplazar NaN con 0 para evitar errores de formato
+
+    z_vals = pivot.values.tolist()
+    # Texto seguro: si el valor es 0 o nan mostrar "—", si no el porcentaje
+    text_vals = [
+        [f"{v:.1f}%" if v > 0 else "—" for v in row]
+        for row in z_vals
+    ]
+
     fig = go.Figure(go.Heatmap(
-        z=pivot.values,
+        z=z_vals,
         x=pivot.columns.tolist(),
         y=pivot.index.tolist(),
         colorscale=[
@@ -120,13 +129,15 @@ def build_heatmap(df: pd.DataFrame) -> go.Figure:
             [1.0,  "#15803d"],
         ],
         zmin=0, zmax=60,
-        text=[[f"{v:.1f}%" for v in row] for row in pivot.values],
+        text=text_vals,
         texttemplate="%{text}",
         textfont={"size": 11, "color": "white"},
         hovertemplate="<b>%{y}</b> | %{x}<br>Cobertura: %{z:.1f}%<extra></extra>",
-        colorbar=dict(title="Cobert. %", thickness=12,
-                      tickfont=dict(color="#475569"),
-                      titlefont=dict(color="#475569")),
+        colorbar=dict(
+            title=dict(text="Cobert. %", font=dict(color="#475569")),
+            thickness=12,
+            tickfont=dict(color="#475569"),
+        ),
     ))
     fig.update_layout(
         height=350,
