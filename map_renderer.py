@@ -22,13 +22,13 @@ PROVINCE_SEEDS = {
 }
 
 LABEL_POSITIONS = {
-    "TAYACAJA":       {"pct": (480, 188), "num": (480, 224)},
-    "CHURCAMPA":      {"pct": (614, 345), "num": (614, 381)},
-    "ACOBAMBA":       {"pct": (558, 448), "num": (558, 482)},
-    "HUANCAVELICA":   {"pct": (305, 435), "num": (305, 471)},
-    "ANGARAES":       {"pct": (524, 588), "num": (524, 622)},
-    "CASTROVIRREYNA": {"pct": (172, 638), "num": (172, 674)},
-    "HUAYTARA":       {"pct": (395, 825), "num": (395, 861)},
+    "TAYACAJA":       {"pct": (480, 230), "num": (480, 266)},
+    "CHURCAMPA":      {"pct": (614, 380), "num": (614, 416)},
+    "ACOBAMBA":       {"pct": (558, 490), "num": (558, 526)},
+    "HUANCAVELICA":   {"pct": (305, 480), "num": (305, 516)},
+    "ANGARAES":       {"pct": (524, 630), "num": (524, 666)},
+    "CASTROVIRREYNA": {"pct": (172, 680), "num": (172, 716)},
+    "HUAYTARA":       {"pct": (395, 860), "num": (395, 896)},
 }
 
 
@@ -86,9 +86,24 @@ def render_colored_map(df: pd.DataFrame, vacuna: str,
             except Exception:
                 continue
 
+    # Composite flood-fill then re-overlay original at higher opacity to sharpen borders
     result = Image.alpha_composite(img, colored)
+    # Re-composite original image to strengthen province border lines
+    border_overlay = img.copy()
+    border_pixels = border_overlay.load()
+    w_img, h_img = border_overlay.size
+    for y in range(h_img):
+        for x in range(w_img):
+            r, g, b, a = border_pixels[x, y]
+            # Original dark pixels are border lines — boost their opacity
+            if r < 80 and g < 80 and b < 80:
+                border_pixels[x, y] = (r, g, b, 255)
+            else:
+                border_pixels[x, y] = (r, g, b, 0)
+    result = Image.alpha_composite(result, border_overlay)
+
     draw = ImageDraw.Draw(result)
-    font = _load_font(18)
+    font = _load_font(26)
 
     # Badges de % por provincia
     for _, row in df_vac.iterrows():
@@ -118,8 +133,8 @@ def _draw_legend(draw, W, H):
         ("#f59e0b", "En Proceso", "26.4–33.1%"),
         ("#ef4444", "Crítico",    "≤ 26.3%"),
     ]
-    font_b = _load_font(16)
-    font_s = _load_font(14)
+    font_b = _load_font(18)
+    font_s = _load_font(15)
     lx, ly = W - 210, H - 175
     pad, bw, bh = 10, 195, 155
     draw.rounded_rectangle([lx - pad, ly - pad, lx + bw, ly + bh],
